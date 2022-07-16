@@ -1,0 +1,3 @@
+```openssl enc -d -aes-256-cbc -salt -pbkdf2 -in rce.py.enc -out rce.py```
+
+Pass: RedP...
